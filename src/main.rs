@@ -2,7 +2,6 @@ use tokio_modbus::prelude::*;
 use tokio_serial::SerialStream;
 use csv::Writer;
 use std::fs::File;
-use std::task::Context;
 use chrono::*;
 use tokio::time::{sleep, Duration};
 use serde::Serialize;
@@ -44,17 +43,53 @@ struct BMSData {
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // let mut ctx = create_connection();
+    let mut ctx = create_connection();
 
     let file = File::create("bms_readings.csv")?;
     let mut writer = Writer::from_writer(file);
 
+    /*  uncomment this to read the binary bits.
+        loop {
+            let rsp = ctx.read_coils(0, 51).await?;
+            println!("Received: {rsp:?}");
+            let data = parse_switches(rsp);
+            for d in &data {
+                writer.serialize(d)?;
+            }
+            writer.flush()?;
+            println!("Data written to CSV.");
+            sleep(Duration::from_secs(5)).await;
+
+
+        }
+    */
+
+    // Start by reading the battery serial number.
+    let rsp = ctx.read_holding_registers(1000, 12).await?;
+
+    let data = parse_response(rsp);
+    let mut u8_array: Vec<u8> = Vec::new();
+    for d in &data {
+        let v = d.to_be_bytes();
+        u8_array.push(v[0]);
+        u8_array.push(v[1]);
+    }
+
+    let result_string = match String::from_utf8(u8_array) {
+        Ok(s) => s,
+        Err(e) => panic!("Invalid UTF-8 sequence: {}", e),
+    };
+
+    // Print the result
+    println!("Battery Serial Number: {}", result_string);
+
+
     loop {
         // Read all 29 holding registers starting at address 0
-        // let rsp = ctx.read_holding_registers(0, 29).await?;
-        // println!("Received: {rsp:?}");
-        // let data = parse_response(rsp);
-        let data = vec![
+        let rsp = ctx.read_holding_registers(0, 29).await?;
+        println!("Received: {rsp:?}");
+        let data = parse_response(rsp);
+        /*let data = vec![
             // Test data for evaluation
             // The documented response includes 3 additional leading bytes
             // that are omitted here
@@ -64,7 +99,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             0x0FCC, 0x0FD7, 0x0FE2, 0x0FED, 0x0FF8,
             0x1003, 0x1004, 0x100F, 0x101A, 0x1025,
             0x1030, 0x103B, 0x1046, 0x1051
-        ];
+        ];*/
         let formatted_data = format_values(data);
 
         for data in &formatted_data {
@@ -86,7 +121,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// Create a new serial connection to the BMS
 /// Requires a USB to RS485 converter
 fn create_connection() -> tokio_modbus::client::Context {
-    let tty_path = "COM3";
+    let tty_path = "/dev/tty.usbserial-4";
     let slave = Slave(1); // Peripheral address is 1
 
     let builder = tokio_serial::new(tty_path, 9600);
@@ -99,6 +134,11 @@ fn create_connection() -> tokio_modbus::client::Context {
 fn parse_response(data: Vec<u16>) -> Vec<u16> {
     data.into_iter().collect()
 }
+
+fn parse_switches(data: Vec<bool>) -> Vec<bool> {
+    data.into_iter().collect()
+}
+
 
 /// Formats decimals values into a BMSData struct, performing
 /// conversions according to the manufacturers specification
